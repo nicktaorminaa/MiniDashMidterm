@@ -5,13 +5,14 @@ const router = express.Router();
 
 const DELIVERY_FEE_CENTS = 299;
 const TAX_RATE = 0.08;
-const MIN_LEAD_MINUTES = 45; // scheduled orders must be at least 45 min out
-const MAX_DAYS_AHEAD = 7;    // and no more than 7 days out
+const MIN_LEAD_MINUTES = 45;     // scheduled orders must be at least 45 min out
+const MAX_DAYS_AHEAD = 7;        // and no more than 7 days out
+const RELEASE_LEAD_MINUTES = 30; // released to the restaurant 30 min before delivery
 const MINUTE = 60 * 1000;
 
 // Allowed status transitions
 const TRANSITIONS = {
-  scheduled: ["placed", "cancelled"],
+  scheduled: ["cancelled"], // only the release timer moves it to "placed"
   placed: ["accepted", "cancelled"],
   accepted: ["preparing", "cancelled"],
   preparing: ["ready_for_pickup", "cancelled"],
@@ -38,6 +39,7 @@ function serialize(order) {
     restaurantName: order.restaurantName,
     deliveryAddress: order.deliveryAddress,
     scheduledFor: order.scheduledFor,
+    releasedAt: order.releasedAt,
     items: order.items.map((i) => ({
       menuItemId: i.menuItemId,
       name: i.name,
@@ -56,6 +58,19 @@ function serialize(order) {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
+}
+
+// Move a scheduled order to "placed". Only acts if it's still "scheduled",
+// so it happens exactly once and never for cancelled orders.
+function releaseScheduledOrder(orderId) {
+  const order = orders.get(orderId);
+  if (!order || order.status !== "scheduled") return;
+
+  const at = new Date().toISOString();
+  order.status = "placed";
+  order.releasedAt = at;
+  order.statusHistory.push({ status: "placed", at });
+  order.updatedAt = at;
 }
 
 // POST /orders
@@ -126,6 +141,7 @@ router.post("/", (req, res) => {
     restaurantName: restaurant.name,
     deliveryAddress: deliveryAddress.trim(),
     scheduledFor: scheduledDate ? scheduledDate.toISOString() : null,
+    releasedAt: null,
     items: lineItems,
     subtotalCents,
     deliveryFeeCents: DELIVERY_FEE_CENTS,
@@ -138,6 +154,13 @@ router.post("/", (req, res) => {
   };
 
   orders.set(order.id, order);
+
+  // Hold scheduled orders and release them 30 minutes before delivery
+  if (scheduledDate) {
+    const releaseAt = scheduledDate.getTime() - RELEASE_LEAD_MINUTES * MINUTE;
+    setTimeout(() => releaseScheduledOrder(order.id), releaseAt - Date.now());
+  }
+
   res.status(201).location(`/orders/${order.id}`).json(serialize(order));
 });
 

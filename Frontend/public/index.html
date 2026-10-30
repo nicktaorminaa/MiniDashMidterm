@@ -139,7 +139,7 @@
     let cart = {}; // { menuItemId: quantity }
 
     const NEXT_STATUSES = {
-      scheduled: ["placed", "cancelled"],
+      scheduled: ["cancelled"],
       placed: ["accepted", "cancelled"],
       accepted: ["preparing", "cancelled"],
       preparing: ["ready_for_pickup", "cancelled"],

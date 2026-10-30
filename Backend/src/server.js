@@ -1,9 +1,13 @@
 const express = require("express");
+const path = require("path");
 const restaurantRoutes = require("./routes/restaurants");
 const orderRoutes = require("./routes/orders");
 
 const app = express();
 app.use(express.json());
+
+// Serve the frontend
+app.use(express.static(path.join(__dirname, "../../Frontend/public")));
 
 app.use("/restaurants", restaurantRoutes);
 app.use("/orders", orderRoutes);

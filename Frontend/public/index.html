@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MiniDash</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f6f6;
+      color: #222;
+    }
+    header {
+      background: #eb1700;
+      color: white;
+      padding: 16px 24px;
+      font-size: 24px;
+      font-weight: bold;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 24px;
+      padding: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h2 { margin-top: 0; }
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 16px;
+    }
+    .restaurants {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .restaurant {
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: border-color 0.15s;
+    }
+    .restaurant:hover { border-color: #ffb3a8; }
+    .restaurant.selected { border-color: #eb1700; }
+    .restaurant h3 { margin: 0 0 6px; }
+    .muted { color: #777; font-size: 14px; }
+    .menu-item, .cart-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .menu-item:last-child, .cart-item:last-child { border-bottom: none; }
+    button {
+      background: #eb1700;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #c41300; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    button.small { padding: 4px 10px; }
+    input, select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .row { display: flex; justify-content: space-between; margin: 4px 0; }
+    .total { font-weight: bold; font-size: 16px; }
+    .status {
+      display: inline-block;
+      background: #fff0ee;
+      color: #eb1700;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: bold;
+      font-size: 13px;
+    }
+    .error { color: #c41300; font-size: 14px; }
+    .qty { display: flex; align-items: center; gap: 8px; }
+  </style>
+</head>
+<body>
+  <header>MiniDash</header>
+
+  <main>
+    <!-- Left side: restaurants + menu -->
+    <section>
+      <h2>Restaurants</h2>
+      <div id="restaurants" class="restaurants"></div>
+
+      <div id="menu-section" style="display:none; margin-top:24px;">
+        <h2 id="menu-title">Menu</h2>
+        <div id="menu" class="card"></div>
+      </div>
+    </section>
+
+    <!-- Right side: cart + order tracking -->
+    <aside>
+      <div class="card">
+        <h2>Your Cart</h2>
+        <div id="cart"><p class="muted">Your cart is empty.</p></div>
+        <input id="address" placeholder="Delivery address" />
+        <button id="place-order" disabled>Place Order</button>
+        <p id="order-error" class="error"></p>
+      </div>
+
+      <div class="card">
+        <h2>Track an Order</h2>
+        <div style="display:flex; gap:8px;">
+          <input id="lookup-id" placeholder="Order ID" style="margin:0;" />
+          <button id="lookup-btn">Find</button>
+        </div>
+        <div id="order-details" style="margin-top:12px;"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    let selectedRestaurant = null;
+    let menu = [];
+    let cart = {}; // { menuItemId: quantity }
+
+    const NEXT_STATUSES = {
+      placed: ["accepted", "cancelled"],
+      accepted: ["preparing", "cancelled"],
+      preparing: ["ready_for_pickup", "cancelled"],
+      ready_for_pickup: ["picked_up"],
+      picked_up: ["delivered"],
+      delivered: [],
+      cancelled: [],
+    };
+
+    const money = (n) => `$${Number(n).toFixed(2)}`;
+    const label = (s) => s.replace(/_/g, " ");
+
+    // ---------- Restaurants ----------
+    async function loadRestaurants() {
+      const res = await fetch("/restaurants");
+      const restaurants = await res.json();
+      const container = document.getElementById("restaurants");
+      container.innerHTML = "";
+
+      restaurants.forEach((r) => {
+        const div = document.createElement("div");
+        div.className = "card restaurant";
+        div.innerHTML = `
+          <h3>${r.name}</h3>
+          <div class="muted">${r.cuisine}</div>
+          <div class="muted">Open ${r.openingHours.open} – ${r.openingHours.close}</div>
+          <div class="muted">~${r.avgPrepMinutes} min prep</div>
+        `;
+        div.onclick = () => selectRestaurant(r, div);
+        container.appendChild(div);
+      });
+    }
+
+    async function selectRestaurant(restaurant, element) {
+      // Switching restaurants clears the cart (one restaurant per order)
+      if (selectedRestaurant && selectedRestaurant.id !== restaurant.id) cart = {};
+      selectedRestaurant = restaurant;
+
+      document.querySelectorAll(".restaurant").forEach((el) => el.classList.remove("selected"));
+      element.classList.add("selected");
+
+      const res = await fetch(`/restaurants/${restaurant.id}/menu`);
+      const data = await res.json();
+      menu = data.items;
+
+      document.getElementById("menu-section").style.display = "block";
+      document.getElementById("menu-title").textContent = `${data.restaurantName} Menu`;
+      renderMenu();
+      renderCart();
+    }
+
+    // ---------- Menu ----------
+    function renderMenu() {
+      const container = document.getElementById("menu");
+      container.innerHTML = "";
+      menu.forEach((item) => {
+        const div = document.createElement("div");
+        div.className = "menu-item";
+        div.innerHTML = `
+          <div>
+            <strong>${item.name}</strong>
+            <div class="muted">${money(item.price)}</div>
+          </div>
+          <button class="small">Add</button>
+        `;
+        div.querySelector("button").onclick = () => {
+          cart[item.id] = (cart[item.id] || 0) + 1;
+          renderCart();
+        };
+        container.appendChild(div);
+      });
+    }
+
+    // ---------- Cart ----------
+    function renderCart() {
+      const container = document.getElementById("cart");
+      const ids = Object.keys(cart);
+
+      if (ids.length === 0) {
+        container.innerHTML = `<p class="muted">Your cart is empty.</p>`;
+        document.getElementById("place-order").disabled = true;
+        return;
+      }
+
+      container.innerHTML = "";
+      let subtotal = 0;
+
+      ids.forEach((id) => {
+        const item = menu.find((m) => m.id === Number(id));
+        const qty = cart[id];
+        subtotal += item.price * qty;
+
+        const div = document.createElement("div");
+        div.className = "cart-item";
+        div.innerHTML = `
+          <div>${item.name}</div>
+          <div class="qty">
+            <button class="small minus">−</button>
+            <span>${qty}</span>
+            <button class="small plus">+</button>
+          </div>
+        `;
+        div.querySelector(".minus").onclick = () => {
+          cart[id]--;
+          if (cart[id] <= 0) delete cart[id];
+          renderCart();
+        };
+        div.querySelector(".plus").onclick = () => {
+          cart[id]++;
+          renderCart();
+        };
+        container.appendChild(div);
+      });
+
+      const totalDiv = document.createElement("div");
+      totalDiv.className = "row total";
+      totalDiv.style.marginTop = "10px";
+      totalDiv.innerHTML = `<span>Subtotal</span><span>${money(subtotal)}</span>`;
+      container.appendChild(totalDiv);
+
+      document.getElementById("place-order").disabled = false;
+    }
+
+    // ---------- Place order ----------
+    document.getElementById("place-order").onclick = async () => {
+      const errorEl = document.getElementById("order-error");
+      errorEl.textContent = "";
+
+      const address = document.getElementById("address").value.trim();
+      if (!address) {
+        errorEl.textContent = "Please enter a delivery address.";
+        return;
+      }
+
+      const body = {
+        restaurantId: selectedRestaurant.id,
+        deliveryAddress: address,
+        items: Object.entries(cart).map(([id, qty]) => ({
+          menuItemId: Number(id),
+          quantity: qty,
+        })),
+      };
+
+      const res = await fetch("/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        errorEl.textContent = data.error;
+        return;
+      }
+
+      cart = {};
+      renderCart();
+      document.getElementById("address").value = "";
+      document.getElementById("lookup-id").value = data.id;
+      renderOrder(data);
+    };
+
+    // ---------- Track order ----------
+    document.getElementById("lookup-btn").onclick = async () => {
+      const id = document.getElementById("lookup-id").value.trim();
+      if (!id) return;
+      const res = await fetch(`/orders/${id}`);
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("order-details").innerHTML =
+          `<p class="error">${data.error}</p>`;
+        return;
+      }
+      renderOrder(data);
+    };
+
+    function renderOrder(order) {
+      const container = document.getElementById("order-details");
+      const nextOptions = NEXT_STATUSES[order.status];
+
+      container.innerHTML = `
+        <p><strong>Order #${order.id}</strong> — ${order.restaurantName}</p>
+        <p>Status: <span class="status">${label(order.status)}</span></p>
+        <p class="muted">${order.deliveryAddress}</p>
+        ${order.items.map((i) => `
+          <div class="row">
+            <span>${i.quantity} × ${i.name}</span>
+            <span>${money(i.lineTotal)}</span>
+          </div>`).join("")}
+        <hr />
+        <div class="row"><span>Subtotal</span><span>${money(order.totals.subtotal)}</span></div>
+        <div class="row"><span>Delivery fee</span><span>${money(order.totals.deliveryFee)}</span></div>
+        <div class="row"><span>Tax</span><span>${money(order.totals.tax)}</span></div>
+        <div class="row total"><span>Total</span><span>${money(order.totals.total)}</span></div>
+
+        ${nextOptions.length ? `
+          <hr />
+          <p class="muted">Restaurant / driver tools</p>
+          <select id="status-select">
+            ${nextOptions.map((s) => `<option value="${s}">${label(s)}</option>`).join("")}
+          </select>
+          <button id="update-status">Update Status</button>
+          <p id="status-error" class="error"></p>
+        ` : ""}
+      `;
+
+      const btn = document.getElementById("update-status");
+      if (btn) {
+        btn.onclick = async () => {
+          const status = document.getElementById("status-select").value;
+          const res = await fetch(`/orders/${order.id}/status`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            document.getElementById("status-error").textContent = data.error;
+            return;
+          }
+          renderOrder(data);
+        };
+      }
+    }
+
+    loadRestaurants();
+  </script>
+</body>
+</html>

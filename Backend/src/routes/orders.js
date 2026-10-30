@@ -10,6 +10,8 @@ const MAX_DAYS_AHEAD = 7;        // and no more than 7 days out
 const RELEASE_LEAD_MINUTES = 30; // released to the restaurant 30 min before delivery
 const MINUTE = 60 * 1000;
 
+const releaseTimers = new Map(); // orderId -> timer
+
 // Allowed status transitions
 const TRANSITIONS = {
   scheduled: ["cancelled"], // only the release timer moves it to "placed"
@@ -60,17 +62,28 @@ function serialize(order) {
   };
 }
 
+function setStatus(order, status) {
+  const at = new Date().toISOString();
+  order.status = status;
+  order.statusHistory.push({ status, at });
+  order.updatedAt = at;
+  return at;
+}
+
+function stopReleaseTimer(orderId) {
+  if (releaseTimers.has(orderId)) {
+    clearTimeout(releaseTimers.get(orderId));
+    releaseTimers.delete(orderId);
+  }
+}
+
 // Move a scheduled order to "placed". Only acts if it's still "scheduled",
 // so it happens exactly once and never for cancelled orders.
 function releaseScheduledOrder(orderId) {
+  releaseTimers.delete(orderId);
   const order = orders.get(orderId);
   if (!order || order.status !== "scheduled") return;
-
-  const at = new Date().toISOString();
-  order.status = "placed";
-  order.releasedAt = at;
-  order.statusHistory.push({ status: "placed", at });
-  order.updatedAt = at;
+  order.releasedAt = setStatus(order, "placed");
 }
 
 // POST /orders
@@ -158,7 +171,8 @@ router.post("/", (req, res) => {
   // Hold scheduled orders and release them 30 minutes before delivery
   if (scheduledDate) {
     const releaseAt = scheduledDate.getTime() - RELEASE_LEAD_MINUTES * MINUTE;
-    setTimeout(() => releaseScheduledOrder(order.id), releaseAt - Date.now());
+    const timer = setTimeout(() => releaseScheduledOrder(order.id), releaseAt - Date.now());
+    releaseTimers.set(order.id, timer);
   }
 
   res.status(201).location(`/orders/${order.id}`).json(serialize(order));
@@ -168,6 +182,25 @@ router.post("/", (req, res) => {
 router.get("/:id", (req, res) => {
   const order = orders.get(Number(req.params.id));
   if (!order) return res.status(404).json({ error: "Order not found" });
+  res.json(serialize(order));
+});
+
+// POST /orders/:id/cancel — customer cancels a scheduled order before it's released
+router.post("/:id/cancel", (req, res) => {
+  const order = orders.get(Number(req.params.id));
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  if (order.status === "cancelled") {
+    return res.status(409).json({ error: "This order is already cancelled" });
+  }
+  if (order.status !== "scheduled") {
+    return res.status(409).json({
+      error: "This order has already been released to the restaurant and can no longer be cancelled",
+    });
+  }
+
+  stopReleaseTimer(order.id);
+  setStatus(order, "cancelled");
   res.json(serialize(order));
 });
 
@@ -192,11 +225,8 @@ router.patch("/:id/status", (req, res) => {
     });
   }
 
-  const now = new Date().toISOString();
-  order.status = status;
-  order.statusHistory.push({ status, at: now });
-  order.updatedAt = now;
-
+  if (order.status === "scheduled") stopReleaseTimer(order.id);
+  setStatus(order, status);
   res.json(serialize(order));
 });
 

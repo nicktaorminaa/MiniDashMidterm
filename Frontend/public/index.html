@@ -69,6 +69,8 @@
     button:hover { background: #c41300; }
     button:disabled { background: #ccc; cursor: not-allowed; }
     button.small { padding: 4px 10px; }
+    button.secondary { background: #555; }
+    button.secondary:hover { background: #333; }
     input, select {
       width: 100%;
       padding: 8px;
@@ -358,6 +360,13 @@
         <div class="row"><span>Tax</span><span>${money(order.totals.tax)}</span></div>
         <div class="row total"><span>Total</span><span>${money(order.totals.total)}</span></div>
 
+        ${order.status === "scheduled" ? `
+          <button id="cancel-order" class="secondary" style="margin-top:12px; width:100%;">
+            Cancel Scheduled Order
+          </button>
+          <p id="cancel-error" class="error"></p>
+        ` : ""}
+
         ${nextOptions.length ? `
           <hr />
           <p class="muted">Restaurant / driver tools</p>
@@ -381,6 +390,19 @@
           const data = await res.json();
           if (!res.ok) {
             document.getElementById("status-error").textContent = data.error;
+            return;
+          }
+          renderOrder(data);
+        };
+      }
+
+      const cancelBtn = document.getElementById("cancel-order");
+      if (cancelBtn) {
+        cancelBtn.onclick = async () => {
+          const res = await fetch(`/orders/${order.id}/cancel`, { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            document.getElementById("cancel-error").textContent = data.error;
             return;
           }
           renderOrder(data);

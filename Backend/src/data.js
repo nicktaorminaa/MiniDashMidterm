@@ -62,9 +62,4 @@ const restaurants = [
   },
 ];
 
-// In-memory order store
-const orders = new Map();
-let nextOrderId = 1;
-const getNextOrderId = () => nextOrderId++;
-
-module.exports = { restaurants, orders, getNextOrderId };
+module.exports = { restaurants };

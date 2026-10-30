@@ -113,6 +113,11 @@
         <h2>Your Cart</h2>
         <div id="cart"><p class="muted">Your cart is empty.</p></div>
         <input id="address" placeholder="Delivery address" />
+        <select id="when">
+          <option value="asap">Deliver ASAP</option>
+          <option value="schedule">Schedule for later</option>
+        </select>
+        <input id="scheduled-for" type="datetime-local" style="display:none;" />
         <button id="place-order" disabled>Place Order</button>
         <p id="order-error" class="error"></p>
       </div>
@@ -134,6 +139,7 @@
     let cart = {}; // { menuItemId: quantity }
 
     const NEXT_STATUSES = {
+      scheduled: ["placed", "cancelled"],
       placed: ["accepted", "cancelled"],
       accepted: ["preparing", "cancelled"],
       preparing: ["ready_for_pickup", "cancelled"],
@@ -145,6 +151,12 @@
 
     const money = (n) => `$${Number(n).toFixed(2)}`;
     const label = (s) => s.replace(/_/g, " ");
+
+    // Show the date picker only when "Schedule for later" is selected
+    document.getElementById("when").onchange = (e) => {
+      document.getElementById("scheduled-for").style.display =
+        e.target.value === "schedule" ? "block" : "none";
+    };
 
     // ---------- Restaurants ----------
     async function loadRestaurants() {
@@ -277,6 +289,16 @@
         })),
       };
 
+      // Add the scheduled time if the user chose "Schedule for later"
+      if (document.getElementById("when").value === "schedule") {
+        const when = document.getElementById("scheduled-for").value;
+        if (!when) {
+          errorEl.textContent = "Please pick a delivery time.";
+          return;
+        }
+        body.scheduledFor = new Date(when).toISOString();
+      }
+
       const res = await fetch("/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -289,9 +311,13 @@
         return;
       }
 
+      // Reset the form
       cart = {};
       renderCart();
       document.getElementById("address").value = "";
+      document.getElementById("when").value = "asap";
+      document.getElementById("scheduled-for").value = "";
+      document.getElementById("scheduled-for").style.display = "none";
       document.getElementById("lookup-id").value = data.id;
       renderOrder(data);
     };
@@ -317,6 +343,9 @@
       container.innerHTML = `
         <p><strong>Order #${order.id}</strong> — ${order.restaurantName}</p>
         <p>Status: <span class="status">${label(order.status)}</span></p>
+        ${order.scheduledFor
+          ? `<p class="muted">Scheduled for ${new Date(order.scheduledFor).toLocaleString()}</p>`
+          : ""}
         <p class="muted">${order.deliveryAddress}</p>
         ${order.items.map((i) => `
           <div class="row">

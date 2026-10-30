@@ -5,9 +5,13 @@ const router = express.Router();
 
 const DELIVERY_FEE_CENTS = 299;
 const TAX_RATE = 0.08;
+const MIN_LEAD_MINUTES = 45; // scheduled orders must be at least 45 min out
+const MAX_DAYS_AHEAD = 7;    // and no more than 7 days out
+const MINUTE = 60 * 1000;
 
 // Allowed status transitions
 const TRANSITIONS = {
+  scheduled: ["placed", "cancelled"],
   placed: ["accepted", "cancelled"],
   accepted: ["preparing", "cancelled"],
   preparing: ["ready_for_pickup", "cancelled"],
@@ -19,6 +23,13 @@ const TRANSITIONS = {
 
 const toDollars = (cents) => Number((cents / 100).toFixed(2));
 
+function isWithinOpeningHours(date, openingHours) {
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  const [openH, openM] = openingHours.open.split(":").map(Number);
+  const [closeH, closeM] = openingHours.close.split(":").map(Number);
+  return minutes >= openH * 60 + openM && minutes <= closeH * 60 + closeM;
+}
+
 // Shape an order for API output
 function serialize(order) {
   return {
@@ -26,6 +37,7 @@ function serialize(order) {
     restaurantId: order.restaurantId,
     restaurantName: order.restaurantName,
     deliveryAddress: order.deliveryAddress,
+    scheduledFor: order.scheduledFor,
     items: order.items.map((i) => ({
       menuItemId: i.menuItemId,
       name: i.name,
@@ -48,7 +60,7 @@ function serialize(order) {
 
 // POST /orders
 router.post("/", (req, res) => {
-  const { restaurantId, items, deliveryAddress } = req.body || {};
+  const { restaurantId, items, deliveryAddress, scheduledFor } = req.body || {};
 
   const restaurant = restaurants.find((r) => r.id === Number(restaurantId));
   if (!restaurant) return res.status(400).json({ error: "Invalid restaurantId" });
@@ -58,6 +70,31 @@ router.post("/", (req, res) => {
   }
   if (typeof deliveryAddress !== "string" || deliveryAddress.trim() === "") {
     return res.status(400).json({ error: "deliveryAddress is required" });
+  }
+
+  // Optional scheduled delivery time
+  let scheduledDate = null;
+  if (scheduledFor) {
+    scheduledDate = new Date(scheduledFor);
+    if (isNaN(scheduledDate)) {
+      return res.status(400).json({ error: "scheduledFor must be a valid date/time" });
+    }
+    const minutesAhead = (scheduledDate.getTime() - Date.now()) / MINUTE;
+    if (minutesAhead < MIN_LEAD_MINUTES) {
+      return res.status(400).json({
+        error: `Scheduled orders must be at least ${MIN_LEAD_MINUTES} minutes from now`,
+      });
+    }
+    if (minutesAhead > MAX_DAYS_AHEAD * 24 * 60) {
+      return res.status(400).json({
+        error: `Orders can only be scheduled up to ${MAX_DAYS_AHEAD} days ahead`,
+      });
+    }
+    if (!isWithinOpeningHours(scheduledDate, restaurant.openingHours)) {
+      return res.status(400).json({
+        error: `${restaurant.name} is only open ${restaurant.openingHours.open}–${restaurant.openingHours.close}`,
+      });
+    }
   }
 
   const lineItems = [];
@@ -81,19 +118,21 @@ router.post("/", (req, res) => {
   const subtotalCents = lineItems.reduce((sum, i) => sum + i.lineTotalCents, 0);
   const taxCents = Math.round(subtotalCents * TAX_RATE);
   const now = new Date().toISOString();
+  const initialStatus = scheduledDate ? "scheduled" : "placed";
 
   const order = {
     id: getNextOrderId(),
     restaurantId: restaurant.id,
     restaurantName: restaurant.name,
     deliveryAddress: deliveryAddress.trim(),
+    scheduledFor: scheduledDate ? scheduledDate.toISOString() : null,
     items: lineItems,
     subtotalCents,
     deliveryFeeCents: DELIVERY_FEE_CENTS,
     taxCents,
     totalCents: subtotalCents + DELIVERY_FEE_CENTS + taxCents,
-    status: "placed",
-    statusHistory: [{ status: "placed", at: now }],
+    status: initialStatus,
+    statusHistory: [{ status: initialStatus, at: now }],
     createdAt: now,
     updatedAt: now,
   };
